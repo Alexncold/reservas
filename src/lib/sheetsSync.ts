@@ -6,7 +6,7 @@ interface PendingUpdate {
   timestamp: number
 }
 
-let pendingUpdates: PendingUpdate[] = []
+const pendingUpdates: PendingUpdate[] = []
 let isSyncing = false
 let syncTimeout: NodeJS.Timeout | null = null
 
@@ -16,7 +16,7 @@ const SYNC_DELAY = parseInt(process.env.SHEETS_SYNC_DELAY_MS || '1000')
 const CACHE_TTL = parseInt(process.env.SHEETS_CACHE_TTL_MS || '60000')
 
 // Cache para disponibilidad
-const availabilityCache = new Map<string, { data: any; timestamp: number }>()
+const availabilityCache = new Map<string, { data: unknown; timestamp: number }>()
 
 // Configurar autenticación de Google Sheets
 function getGoogleAuth() {
@@ -86,7 +86,8 @@ async function syncToSheets() {
     console.error('Error syncing to Sheets:', error)
     
     // Implementar backoff exponencial
-    if (error.response?.status === 429 || error.response?.status >= 500) {
+    const errorObj = error as { response?: { status?: number } }
+    if (errorObj.response?.status === 429 || errorObj.response?.status && errorObj.response.status >= 500) {
       // Reintentar con delay exponencial
       const retryDelay = Math.min(SYNC_DELAY * 2, 30000) // Máximo 30 segundos
       setTimeout(() => {
@@ -111,7 +112,7 @@ async function syncToSheets() {
 }
 
 // Formatear reserva para Google Sheets
-function formatReservaForSheets(reserva: IReserva): any[] {
+function formatReservaForSheets(reserva: IReserva): unknown[] {
   return [
     reserva.fecha,
     reserva.turno,
@@ -150,11 +151,11 @@ export async function getAvailabilityFromSheets(fecha: string) {
     
     const rows = response.data.values || []
     const reservas = rows
-      .filter((row: any[]) => row[0] === fecha)
-      .map((row: any[]) => ({
+      .filter((row: unknown[]) => row[0] === fecha)
+      .map((row: unknown[]) => ({
         fecha: row[0],
         turno: row[1],
-        mesa: parseInt(row[2]),
+        mesa: parseInt(row[2] as string),
         estado: row[8],
       }))
     
@@ -175,7 +176,7 @@ export async function getAvailabilityFromSheets(fecha: string) {
 }
 
 // Formatear disponibilidad desde reservas
-function formatAvailabilityFromReservas(reservas: any[]) {
+function formatAvailabilityFromReservas(reservas: unknown[]) {
   const turnos = ['17-19', '19-21', '21-23']
   const mesas = [1, 2, 3]
   const availability: Record<string, Record<number, boolean>> = {}
@@ -183,7 +184,7 @@ function formatAvailabilityFromReservas(reservas: any[]) {
   turnos.forEach(turno => {
     availability[turno] = {}
     mesas.forEach(mesa => {
-      const reserva = reservas.find(r => 
+      const reserva = reservas.find((r: any) => 
         r.turno === turno && 
         r.mesa === mesa && 
         ['pendiente_pago', 'confirmada'].includes(r.estado)

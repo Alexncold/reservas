@@ -16,10 +16,7 @@ export async function POST(request: NextRequest) {
     const idempotencyKey = generateIdempotencyKey(validatedData)
     
     // Crear reserva con verificación atómica
-    const reserva = await createReservaWithLock({
-      ...validatedData,
-      idempotencyKey,
-    })
+    const reserva = await createReservaWithLock(validatedData)
     
     // Agregar a la cola de sincronización con Google Sheets
     queueUpdate(reserva)

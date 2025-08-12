@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import { Reserva, IReserva } from './models/Reserva'
 import { CreateReserva } from './schemas'
 import dbConnect from './db/mongodb'
+import crypto from 'crypto'
 
 // Función para verificar disponibilidad
 export async function checkAvailability(
@@ -70,11 +71,11 @@ export async function getReservasByDate(fecha: string): Promise<IReserva[]> {
 export async function updateReservaStatus(
   reservaId: string,
   estado: 'pendiente_pago' | 'confirmada' | 'cancelada',
-  pagoData?: any
+  pagoData?: Record<string, unknown>
 ): Promise<IReserva | null> {
   await dbConnect()
   
-  const updateData: any = { estado }
+  const updateData: Record<string, unknown> = { estado }
   if (pagoData) {
     updateData.pago = pagoData
   }
@@ -110,5 +111,5 @@ export async function getAvailabilityByDate(fecha: string) {
 // Función para generar idempotency key
 export function generateIdempotencyKey(reservaData: CreateReserva): string {
   const data = `${reservaData.fecha}-${reservaData.turno}-${reservaData.mesa}-${reservaData.cliente.email}`
-  return require('crypto').createHash('sha256').update(data).digest('hex')
+  return crypto.createHash('sha256').update(data).digest('hex')
 } 
