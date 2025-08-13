@@ -1,0 +1,384 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "GameHub Reservation API",
+    "description": "API para el sistema de reservas de GameHub",
+    "version": "1.0.0",
+    "contact": {
+      "email": "soporte@gamehub.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "/api",
+      "description": "API base path"
+    }
+  ],
+  "paths": {
+    "/reservas/availability": {
+      "get": {
+        "summary": "Check table availability",
+        "description": "Verifica la disponibilidad de mesas para una fecha y turno específicos",
+        "parameters": [
+          {
+            "name": "fecha",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2025-12-31"
+            },
+            "description": "Fecha para verificar disponibilidad (YYYY-MM-DD)"
+          },
+          {
+            "name": "turno",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["17-19", "19-21", "21-23"],
+              "example": "19-21"
+            },
+            "description": "Turno para verificar disponibilidad"
+          },
+          {
+            "name": "mesa",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "example": 1
+            },
+            "description": "ID de la mesa específica a verificar"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disponibilidad de mesas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "reason": {
+                      "type": "string",
+                      "example": "Mesa disponible"
+                    },
+                    "locks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TableLock"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parámetros inválidos"
+          }
+        }
+      }
+    },
+    "/reservas/create": {
+      "post": {
+        "summary": "Create a new reservation",
+        "description": "Crea una nueva reserva con estado 'pendiente_pago' y adquiere un bloqueo temporal de la mesa",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReservaInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Reserva creada exitosamente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Datos de entrada inválidos"
+          },
+          "409": {
+            "description": "Conflicto - Mesa no disponible"
+          },
+          "423": {
+            "description": "Mesa temporalmente bloqueada"
+          },
+          "500": {
+            "description": "Error interno del servidor"
+          }
+        }
+      },
+      "options": {
+        "summary": "CORS preflight",
+        "responses": {
+          "200": {
+            "description": "CORS preflight response"
+          }
+        }
+      }
+    },
+    "/reservas/{id}": {
+      "put": {
+        "summary": "Update a reservation",
+        "description": "Actualiza una reserva existente",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID de la reserva a actualizar"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReservaInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reserva actualizada exitosamente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Datos de entrada inválidos"
+          },
+          "404": {
+            "description": "Reserva no encontrada"
+          },
+          "500": {
+            "description": "Error interno del servidor"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Cancel a reservation",
+        "description": "Cancela una reserva existente y libera el bloqueo de la mesa",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID de la reserva a cancelar"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reserva cancelada exitosamente"
+          },
+          "404": {
+            "description": "Reserva no encontrada"
+          },
+          "500": {
+            "description": "Error interno del servidor"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ReservaInput": {
+        "type": "object",
+        "required": ["fecha", "turno", "mesa", "personas", "cliente"],
+        "properties": {
+          "fecha": {
+            "type": "string",
+            "format": "date",
+            "example": "2025-12-31"
+          },
+          "turno": {
+            "type": "string",
+            "enum": ["17-19", "19-21", "21-23"],
+            "example": "19-21"
+          },
+          "mesa": {
+            "type": "integer",
+            "example": 1
+          },
+          "personas": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8,
+            "example": 4
+          },
+          "cliente": {
+            "type": "object",
+            "required": ["nombre", "email", "telefono"],
+            "properties": {
+              "nombre": {
+                "type": "string",
+                "example": "Juan Pérez"
+              },
+              "email": {
+                "type": "string",
+                "format": "email",
+                "example": "juan@example.com"
+              },
+              "telefono": {
+                "type": "string",
+                "example": "+541112345678"
+              }
+            }
+          },
+          "notas": {
+            "type": "string",
+            "example": "Mesa cerca de la ventana"
+          }
+        }
+      },
+      "ReservaResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "reserva": {
+                "$ref": "#/components/schemas/Reserva"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "example": "abc123-def456-ghi789"
+              }
+            }
+          },
+          "message": {
+            "type": "string",
+            "example": "Reserva creada exitosamente"
+          }
+        }
+      },
+      "Reserva": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "507f1f77bcf86cd799439011"
+          },
+          "fecha": {
+            "type": "string",
+            "format": "date",
+            "example": "2025-12-31"
+          },
+          "turno": {
+            "type": "string",
+            "example": "19-21"
+          },
+          "mesa": {
+            "type": "integer",
+            "example": 1
+          },
+          "personas": {
+            "type": "integer",
+            "example": 4
+          },
+          "estado": {
+            "type": "string",
+            "enum": ["pendiente_pago", "confirmada", "cancelada"],
+            "example": "pendiente_pago"
+          },
+          "montoTotal": {
+            "type": "string",
+            "example": "$4000.00"
+          }
+        }
+      },
+      "TableLock": {
+        "type": "object",
+        "properties": {
+          "reservaId": {
+            "type": "string",
+            "example": "507f1f77bcf86cd799439011"
+          },
+          "mesaId": {
+            "type": "string",
+            "example": "1"
+          },
+          "fecha": {
+            "type": "string",
+            "format": "date",
+            "example": "2025-12-31"
+          },
+          "turno": {
+            "type": "string",
+            "example": "19-21"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2025-12-31T19:15:00.000Z"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "error": {
+            "type": "string",
+            "example": "Mensaje de error descriptivo"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Detalles adicionales del error"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ]
+}

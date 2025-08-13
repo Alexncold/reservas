@@ -3,6 +3,7 @@ import { Reserva, IReserva } from './models/Reserva'
 import { CreateReserva } from './schemas'
 import dbConnect from './db/mongodb'
 import crypto from 'crypto'
+import { logger } from './logger'
 
 // Función para verificar disponibilidad
 export async function checkAvailability(
@@ -110,6 +111,58 @@ export async function getAvailabilityByDate(fecha: string) {
 
 // Función para generar idempotency key
 export function generateIdempotencyKey(reservaData: CreateReserva): string {
-  const data = `${reservaData.fecha}-${reservaData.turno}-${reservaData.mesa}-${reservaData.cliente.email}`
-  return crypto.createHash('sha256').update(data).digest('hex')
-} 
+  const data = `${reservaData.fecha}-${reservaData.turno}-${reservaData.mesa}-${Date.now()}`
+  return crypto.createHash('md5').update(data).digest('hex')
+}
+
+/**
+ * Actualiza una reserva con la información de preferencia de pago
+ * @param reservaId ID de la reserva a actualizar
+ * @param preferenceId ID de la preferencia de pago de MercadoPago
+ * @returns La reserva actualizada o null si no se encontró
+ */
+export async function updateReservaWithPaymentPreference(
+  reservaId: string,
+  preferenceId: string
+): Promise<IReserva | null> {
+  const session = await mongoose.startSession()
+  
+  try {
+    session.startTransaction()
+    
+    const reserva = await Reserva.findById(reservaId).session(session)
+    
+    if (!reserva) {
+      logger.warn('Reserva no encontrada al actualizar preferencia de pago', { reservaId })
+      await session.abortTransaction()
+      return null
+    }
+    
+    // Actualizar la reserva con el ID de preferencia
+    reserva.pago = reserva.pago || {}
+    reserva.pago.mercadopago_preference_id = preferenceId
+    reserva.pago.estado = 'pendiente'
+    reserva.pago.fecha_actualizacion = new Date()
+    
+    await reserva.save({ session })
+    await session.commitTransaction()
+    
+    logger.info('Reserva actualizada con preferencia de pago', {
+      reservaId,
+      preferenceId,
+      estado: 'pendiente'
+    })
+    
+    return reserva
+  } catch (error) {
+    await session.abortTransaction()
+    logger.error('Error al actualizar la reserva con preferencia de pago', {
+      error,
+      reservaId,
+      preferenceId
+    })
+    throw error
+  } finally {
+    await session.endSession()
+  }
+}

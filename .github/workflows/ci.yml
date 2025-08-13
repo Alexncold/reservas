@@ -1,0 +1,189 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  NODE_VERSION: '20.x'
+  MONGODB_VERSION: '6.0'
+  DATABASE_URL: mongodb://localhost:27017/gamehub_test
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:${{ env.MONGODB_VERSION }}
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.serverStatus().ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'yarn'
+
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+
+    - name: Lint
+      run: yarn lint
+
+    - name: Type check
+      run: yarn typecheck
+
+    - name: Run unit tests
+      run: yarn test:unit
+      env:
+        MONGODB_URI: ${{ env.DATABASE_URL }}
+        NODE_ENV: test
+        JWT_SECRET: test-jwt-secret
+
+    - name: Run integration tests
+      run: yarn test:integration
+      env:
+        MONGODB_URI: ${{ env.DATABASE_URL }}
+        NODE_ENV: test
+        JWT_SECRET: test-jwt-secret
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage/lcov.info
+        fail_ci_if_error: false
+
+  build:
+    name: Build
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile
+      
+    - name: Build application
+      run: yarn build
+      env:
+        NODE_ENV: production
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: build
+        path: .next/
+        retention-days: 1
+
+  e2e:
+    name: E2E Tests
+    needs: build
+    runs-on: ubuntu-latest
+    
+    services:
+      mongodb:
+        image: mongo:${{ env.MONGODB_VERSION }}
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.serverStatus().ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: build
+        path: .next/
+    
+    - name: Install dependencies
+      run: yarn install --frozen-lockfile --production=false
+    
+    - name: Start server
+      run: |
+        yarn start & echo $! > server.pid
+        yarn wait-on http://localhost:3000
+      env:
+        MONGODB_URI: ${{ env.DATABASE_URL }}
+        NODE_ENV: test
+        PORT: 3000
+    
+    - name: Run E2E tests
+      run: yarn test:e2e
+      env:
+        BASE_URL: http://localhost:3000
+        
+    - name: Stop server
+      if: always()
+      run: |
+        if [ -f server.pid ]; then
+          kill $(cat server.pid) || true
+          rm server.pid
+        fi
+
+  security:
+    name: Security Checks
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+    
+    - name: Run dependency audit
+      run: yarn audit --level=high
+      continue-on-error: true
+    
+    - name: Run security scan
+      uses: snyk/actions/node@master
+      continue-on-error: true
+      with:
+        args: --severity-threshold=high --skip-unresolved
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  lighthouse:
+    name: Performance Audit
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run Lighthouse Audit
+      uses: treosh/lighthouse-ci-action@v11
+      with:
+        uploadArtifacts: true
+        temporaryPublicStorage: true
+        configPath: .lighthouserc.json
+      env:
+        LHCI_GITHUB_APP_TOKEN: ${{ secrets.GH_TOKEN }}

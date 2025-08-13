@@ -1,0 +1,141 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - staging
+        - production
+
+env:
+  NODE_VERSION: '20.x'
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment || 'production' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'yarn'
+    
+    - name: Install Vercel CLI
+      run: npm install --global vercel@latest
+    
+    - name: Pull Vercel Environment Information
+      run: vercel pull --yes --environment=${{ github.event.inputs.environment || 'production' }} --token=${{ secrets.VERCEL_TOKEN }}
+    
+    - name: Build Project Artifacts
+      run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
+    
+    - name: Run database migrations
+      run: npx vercel-queue migrate
+      env:
+        MONGODB_URI: ${{ secrets.MONGODB_URI }}
+    
+    - name: Deploy Project Artifacts to Vercel
+      id: deploy
+      run: |
+        DEPLOYMENT_URL=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }} --confirm --prod)
+        echo "deployment_url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+    
+    - name: Register webhooks
+      run: |
+        # Register MercadoPago webhook
+        curl -X POST \
+          "https://api.mercadopago.com/v1/webhooks?access_token=${{ secrets.MP_ACCESS_TOKEN }}" \
+          -H 'Content-Type: application/json' \
+          -d '{
+            "url": "${{ steps.deploy.outputs.deployment_url }}/api/mp/webhook"
+          }'
+          
+        # Register WhatsApp webhook
+        curl -X POST \
+          "https://graph.facebook.com/v18.0/${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}/webhooks" \
+          -H "Authorization: Bearer ${{ secrets.WHATSAPP_TOKEN }}" \
+          -H 'Content-Type: application/json' \
+          -d '{
+            "url": "${{ steps.deploy.outputs.deployment_url }}/api/whatsapp/webhook",
+            "verify_token": "${{ secrets.WHATSAPP_WEBHOOK_SECRET }}",
+            "fields": ["messages", "statuses"]
+          }'
+      continue-on-error: true
+      
+    - name: Verify deployment
+      run: |
+        # Run smoke tests
+        curl -sSfL "${{ steps.deploy.outputs.deployment_url }}/api/health" | jq -e '.status == "ok"'
+        
+        # Verify environment variables
+        curl -sSfL "${{ steps.deploy.outputs.deployment_url }}/api/env-check" | jq -e '.requiredEnvVars.allPresent == true'
+    
+    - name: Update deployment status
+      if: always()
+      uses: bobheadxi/deployments@v1
+      with:
+        step: finish
+        token: ${{ secrets.GITHUB_TOKEN }}
+        status: ${{ job.status }}
+        deployment_id: ${{ github.event.deployment.id }}
+        env: ${{ github.event.inputs.environment || 'production' }}
+
+  notify:
+    name: Notify Deployment
+    needs: deploy
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Send Slack notification
+      uses: rtCamp/action-slack-notify@v2
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_TITLE: "Deployment ${{ job.status }} - ${{ github.event.inputs.environment || 'production' }}"
+        SLACK_MESSAGE: "Deployment ${{ job.status }} for ${{ github.repository }}@${{ github.sha }}"
+        SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+    
+    - name: Create GitHub deployment status
+      if: failure()
+      uses: bobheadxi/deployments@v1
+      with:
+        step: delete_env
+        token: ${{ secrets.GITHUB_TOKEN }}
+        env: ${{ github.event.inputs.environment || 'production' }}
+
+  post-deploy:
+    name: Post-Deployment Checks
+    needs: [deploy, notify]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run post-deployment tests
+      run: |
+        # Run smoke tests against production
+        curl -sSfL "${{ needs.deploy.outputs.deployment_url }}/api/health"
+        
+        # Check cron jobs
+        curl -sSfL "${{ needs.deploy.outputs.deployment_url }}/api/cron/status"
+      continue-on-error: true
+      
+    - name: Update status
+      if: always()
+      run: |
+        echo "Deployment URL: ${{ needs.deploy.outputs.deployment_url }}"
+        echo "Deployment Status: ${{ needs.deploy.result }}"
